@@ -1,0 +1,14 @@
+# MacOS
+.DS_Store
+
+# Rust build artifacts
+target/
+**/target/
+
+# Data & Logs (Local memory storage)
+**/memory/
+*.log
+*.vec
+
+# Compiled binaries in skills directory
+skills/persistent-memory/scripts/memstore

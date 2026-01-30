@@ -1,0 +1,10 @@
+[package]
+name = "memstore"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hnsw_rs = "0.3"
+
+[profile.release]
+strip = true
