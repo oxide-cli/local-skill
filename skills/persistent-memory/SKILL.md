@@ -14,17 +14,12 @@ description: 持久化对话记忆与外挂大脑。用于：自动写入对话�
 
 ## 资源
 - Rust CLI（二进制）：`scripts/memstore`（本地文件存储 + 检索）
-- Rust 源码：`/Users/c.chen/dev/local-skill/src/memstore`
 - 记录格式参考：`references/memory-format.md`
 
 ## 初始化
-1) 在 `src/memstore` 构建 CLI：
-   - `cargo build --release`
-2) 拷贝二进制到 Skill 目录：
-   - `cp /Users/c.chen/dev/local-skill/src/memstore/target/release/memstore /Users/c.chen/dev/local-skill/skills/persistent-memory/scripts/memstore`
-3) 运行时使用 Skill 内二进制：
-   - `/Users/c.chen/dev/local-skill/skills/persistent-memory/scripts/memstore`
-3) 默认存储路径：`memory/memories.hnsw`（可用 `MEMSTORE_PATH` 或 `--path` 覆盖）
+1) 直接使用 Skill 内二进制（无需 Rust 环境）：
+   - `./scripts/memstore`
+2) 默认存储路径：`memory/memories.hnsw`（可用 `MEMSTORE_PATH` 或 `--path` 覆盖）
 
 ## 写入流程
 ### 自动摘要（每轮对话结束）
