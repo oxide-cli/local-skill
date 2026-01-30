@@ -1,28 +1,38 @@
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hnsw_rs::anndists::dist::distances::DistCosine;
 use hnsw_rs::prelude::{Hnsw, Neighbour};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Record {
     id: u128,
     ts: i64,
     kind: String,
     weight: f32,
     text: String,
+    vector: Vec<f32>,
 }
 
 const VECTOR_DIM: usize = 256;
+const STORE_VERSION: u32 = 1;
 const HNSW_M: usize = 16;
 const HNSW_EF_CONSTRUCTION: usize = 200;
 const HNSW_NB_LAYER: usize = 16;
 const HNSW_EF_SEARCH: usize = 50;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Store {
+    version: u32,
+    vector_dim: usize,
+    records: Vec<Record>,
+}
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -58,10 +68,10 @@ fn print_usage() {
         "memstore - simple local memory store\n\n")
     ;
     eprintln!("Commands:");
-    eprintln!("  add     --text <text> [--kind <kind>] [--weight <w>] [--path <file>] [--vec-path <file>]");
-    eprintln!("  search  --query <text> [--limit <n>] [--path <file>] [--vec-path <file>]");
+    eprintln!("  add     --text <text> [--kind <kind>] [--weight <w>] [--path <file>]");
+    eprintln!("  search  --query <text> [--limit <n>] [--path <file>]");
     eprintln!("  recent  [--limit <n>] [--path <file>]");
-    eprintln!("  compact [--keep <n>] [--path <file>] [--vec-path <file>]");
+    eprintln!("  compact [--keep <n>] [--path <file>]");
     eprintln!("\nDefaults:");
     eprintln!("  kind=summary, weight=1.0, limit=3, keep=5000");
 }
@@ -71,7 +81,6 @@ fn cmd_add(args: &[String]) -> Result<(), &'static str> {
     let mut kind = "summary".to_string();
     let mut weight: f32 = 1.0;
     let mut path = default_path();
-    let mut vec_path = default_vec_path();
 
     let mut i = 0;
     while i < args.len() {
@@ -98,12 +107,6 @@ fn cmd_add(args: &[String]) -> Result<(), &'static str> {
                     path = PathBuf::from(v);
                 }
             }
-            "--vec-path" => {
-                i += 1;
-                if let Some(v) = args.get(i) {
-                    vec_path = PathBuf::from(v);
-                }
-            }
             _ => {}
         }
         i += 1;
@@ -120,10 +123,12 @@ fn cmd_add(args: &[String]) -> Result<(), &'static str> {
         ts: now_secs(),
         kind,
         weight,
+        vector: embed_text(&text),
         text,
     };
-    append_record(&path, &record).map_err(|_| "write failed")?;
-    append_vector(&vec_path, &record).map_err(|_| "write failed")?;
+    let mut store = load_store(&path).map_err(|_| "read failed")?;
+    store.records.push(record);
+    save_store(&path, &store).map_err(|_| "write failed")?;
     Ok(())
 }
 
@@ -131,7 +136,6 @@ fn cmd_search(args: &[String]) -> Result<(), &'static str> {
     let mut query: Option<String> = None;
     let mut limit: usize = 3;
     let mut path = default_path();
-    let mut vec_path = default_vec_path();
 
     let mut i = 0;
     while i < args.len() {
@@ -152,12 +156,6 @@ fn cmd_search(args: &[String]) -> Result<(), &'static str> {
                     path = PathBuf::from(v);
                 }
             }
-            "--vec-path" => {
-                i += 1;
-                if let Some(v) = args.get(i) {
-                    vec_path = PathBuf::from(v);
-                }
-            }
             _ => {}
         }
         i += 1;
@@ -168,9 +166,8 @@ fn cmd_search(args: &[String]) -> Result<(), &'static str> {
         return Err("missing query");
     };
 
-    let records = load_records(&path).map_err(|_| "read failed")?;
-    let vectors = load_vectors(&vec_path).unwrap_or_default();
-    let scored = score_records(&query, &records, &vectors, limit);
+    let store = load_store(&path).map_err(|_| "read failed")?;
+    let scored = score_records(&query, &store.records, limit);
     for (score, rec) in scored.into_iter().take(limit) {
         println!("{score:.3}\t{}\t{}\t{}\t{}", rec.kind, rec.id, rec.ts, rec.text.replace('\n', " "));
     }
@@ -201,7 +198,8 @@ fn cmd_recent(args: &[String]) -> Result<(), &'static str> {
         i += 1;
     }
 
-    let mut records = load_records(&path).map_err(|_| "read failed")?;
+    let store = load_store(&path).map_err(|_| "read failed")?;
+    let mut records = store.records;
     records.sort_by(|a, b| b.ts.cmp(&a.ts));
     for rec in records.into_iter().take(limit) {
         println!("{}\t{}\t{}\t{}", rec.kind, rec.id, rec.ts, rec.text.replace('\n', " "));
@@ -212,7 +210,6 @@ fn cmd_recent(args: &[String]) -> Result<(), &'static str> {
 fn cmd_compact(args: &[String]) -> Result<(), &'static str> {
     let mut keep: usize = 5000;
     let mut path = default_path();
-    let mut vec_path = default_vec_path();
 
     let mut i = 0;
     while i < args.len() {
@@ -229,24 +226,17 @@ fn cmd_compact(args: &[String]) -> Result<(), &'static str> {
                     path = PathBuf::from(v);
                 }
             }
-            "--vec-path" => {
-                i += 1;
-                if let Some(v) = args.get(i) {
-                    vec_path = PathBuf::from(v);
-                }
-            }
             _ => {}
         }
         i += 1;
     }
 
-    let mut records = load_records(&path).map_err(|_| "read failed")?;
-    records.sort_by(|a, b| b.ts.cmp(&a.ts));
-    if records.len() > keep {
-        records.truncate(keep);
+    let mut store = load_store(&path).map_err(|_| "read failed")?;
+    store.records.sort_by(|a, b| b.ts.cmp(&a.ts));
+    if store.records.len() > keep {
+        store.records.truncate(keep);
     }
-    write_records(&path, &records).map_err(|_| "write failed")?;
-    write_vectors(&vec_path, &records).map_err(|_| "write failed")?;
+    save_store(&path, &store).map_err(|_| "write failed")?;
     Ok(())
 }
 
@@ -254,14 +244,7 @@ fn default_path() -> PathBuf {
     if let Ok(p) = env::var("MEMSTORE_PATH") {
         return PathBuf::from(p);
     }
-    PathBuf::from("memory/memories.log")
-}
-
-fn default_vec_path() -> PathBuf {
-    if let Ok(p) = env::var("MEMSTORE_VEC_PATH") {
-        return PathBuf::from(p);
-    }
-    PathBuf::from("memory/memories.vec")
+    PathBuf::from("memory/memories.hnsw")
 }
 
 fn ensure_parent_dir(path: &Path) -> io::Result<()> {
@@ -271,190 +254,36 @@ fn ensure_parent_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn append_record(path: &Path, rec: &Record) -> io::Result<()> {
-    let file = OpenOptionsExt::open_append(path)?;
-    let mut writer = BufWriter::new(file);
-    writeln!(
-        writer,
-        "{}|{}|{}|{}|{}",
-        rec.id,
-        rec.ts,
-        escape(&rec.kind),
-        rec.weight,
-        escape(&rec.text)
-    )?;
-    writer.flush()?;
-    Ok(())
-}
-
-fn append_vector(path: &Path, rec: &Record) -> io::Result<()> {
-    let vec = embed_text(&rec.text);
-    let file = OpenOptionsExt::open_append(path)?;
-    let mut writer = BufWriter::new(file);
-    write!(writer, "{}|{}|", rec.id, VECTOR_DIM)?;
-    for (i, v) in vec.iter().enumerate() {
-        if i > 0 {
-            write!(writer, ",")?;
-        }
-        write!(writer, "{:.6}", v)?;
-    }
-    writeln!(writer)?;
-    writer.flush()?;
-    Ok(())
-}
-
-fn write_records(path: &Path, records: &[Record]) -> io::Result<()> {
+fn save_store(path: &Path, store: &Store) -> io::Result<()> {
     ensure_parent_dir(path)?;
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
-    for rec in records {
-        writeln!(
-            writer,
-            "{}|{}|{}|{}|{}",
-            rec.id,
-            rec.ts,
-            escape(&rec.kind),
-            rec.weight,
-            escape(&rec.text)
-        )?;
-    }
+    let data = bincode::serialize(store).map_err(|_| io::ErrorKind::InvalidData)?;
+    writer.write_all(&data)?;
     writer.flush()?;
     Ok(())
 }
 
-fn write_vectors(path: &Path, records: &[Record]) -> io::Result<()> {
-    ensure_parent_dir(path)?;
-    let file = File::create(path)?;
-    let mut writer = BufWriter::new(file);
-    for rec in records {
-        let vec = embed_text(&rec.text);
-        write!(writer, "{}|{}|", rec.id, VECTOR_DIM)?;
-        for (i, v) in vec.iter().enumerate() {
-            if i > 0 {
-                write!(writer, ",")?;
-            }
-            write!(writer, "{:.6}", v)?;
-        }
-        writeln!(writer)?;
-    }
-    writer.flush()?;
-    Ok(())
-}
-
-fn load_records(path: &Path) -> io::Result<Vec<Record>> {
+fn load_store(path: &Path) -> io::Result<Store> {
     if !path.exists() {
-        return Ok(Vec::new());
+        return Ok(Store {
+            version: STORE_VERSION,
+            vector_dim: VECTOR_DIM,
+            records: Vec::new(),
+        });
     }
     let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut records = Vec::new();
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Some(rec) = parse_record_line(&line) {
-            records.push(rec);
-        }
+    let mut data = Vec::new();
+    let mut reader = file;
+    reader.read_to_end(&mut data)?;
+    let store: Store = bincode::deserialize(&data).map_err(|_| io::ErrorKind::InvalidData)?;
+    if store.vector_dim != VECTOR_DIM || store.version != STORE_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "incompatible store format",
+        ));
     }
-    Ok(records)
-}
-
-fn load_vectors(path: &Path) -> io::Result<HashMap<u128, Vec<f32>>> {
-    if !path.exists() {
-        return Ok(HashMap::new());
-    }
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut map = HashMap::new();
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Some((id, vec)) = parse_vector_line(&line) {
-            map.insert(id, vec);
-        }
-    }
-    Ok(map)
-}
-
-fn parse_record_line(line: &str) -> Option<Record> {
-    let parts: Vec<&str> = line.splitn(5, '|').collect();
-    if parts.len() != 5 {
-        return None;
-    }
-    let id = parts[0].parse::<u128>().ok()?;
-    let ts = parts[1].parse::<i64>().ok()?;
-    let kind = unescape(parts[2]);
-    let weight = parts[3].parse::<f32>().ok()?;
-    let text = unescape(parts[4]);
-    Some(Record {
-        id,
-        ts,
-        kind,
-        weight,
-        text,
-    })
-}
-
-fn parse_vector_line(line: &str) -> Option<(u128, Vec<f32>)> {
-    let parts: Vec<&str> = line.splitn(3, '|').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-    let id = parts[0].parse::<u128>().ok()?;
-    let dim = parts[1].parse::<usize>().ok()?;
-    let values: Vec<f32> = if parts[2].is_empty() {
-        Vec::new()
-    } else {
-        parts[2]
-            .split(',')
-            .filter_map(|v| v.parse::<f32>().ok())
-            .collect()
-    };
-    if values.len() != dim {
-        return None;
-    }
-    Some((id, values))
-}
-
-fn escape(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '|' => out.push_str("\\|"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-fn unescape(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            if let Some(next) = chars.next() {
-                match next {
-                    'n' => out.push('\n'),
-                    '|' => out.push('|'),
-                    '\\' => out.push('\\'),
-                    _ => {
-                        out.push('\\');
-                        out.push(next);
-                    }
-                }
-            } else {
-                out.push('\\');
-            }
-        } else {
-            out.push(ch);
-        }
-    }
-    out
+    Ok(store)
 }
 
 fn tokenize(text: &str) -> Vec<String> {
@@ -474,25 +303,18 @@ fn tokenize(text: &str) -> Vec<String> {
     tokens
 }
 
-fn score_records(
-    query: &str,
-    records: &[Record],
-    vectors: &HashMap<u128, Vec<f32>>,
-    limit: usize,
-) -> Vec<(f32, Record)> {
+fn score_records(query: &str, records: &[Record], limit: usize) -> Vec<(f32, Record)> {
     let query_vec = embed_text(query);
     let now = now_secs();
-    let (ids, vecs) = collect_vectors(records, vectors);
-    let candidate_ids = hnsw_candidate_ids(&query_vec, &ids, &vecs, records.len(), limit);
+    let (indices, vecs) = collect_vectors(records);
+    let candidate_indices =
+        hnsw_candidate_indices(&query_vec, &indices, &vecs, records.len(), limit);
     let mut scored: Vec<(f32, Record)> = records
         .iter()
-        .filter(|rec| candidate_ids.contains(&rec.id))
-        .map(|rec| {
-            let vec = vectors
-                .get(&rec.id)
-                .cloned()
-                .unwrap_or_else(|| embed_text(&rec.text));
-            let cosine = cosine_sim(&query_vec, &vec);
+        .enumerate()
+        .filter(|(idx, _)| candidate_indices.contains(idx))
+        .map(|(_, rec)| {
+            let cosine = cosine_sim(&query_vec, &rec.vector);
             let age_days = ((now - rec.ts).max(0) as f32) / 86400.0;
             let recency = 1.0 / (1.0 + age_days);
             let score = cosine * 2.0 + rec.weight * 0.5 + recency;
@@ -504,38 +326,31 @@ fn score_records(
     scored
 }
 
-fn collect_vectors(
-    records: &[Record],
-    vectors: &HashMap<u128, Vec<f32>>,
-) -> (Vec<u128>, Vec<Vec<f32>>) {
-    let mut ids = Vec::with_capacity(records.len());
+fn collect_vectors(records: &[Record]) -> (Vec<usize>, Vec<Vec<f32>>) {
+    let mut indices = Vec::with_capacity(records.len());
     let mut vecs = Vec::with_capacity(records.len());
-    for rec in records {
-        let vec = vectors
-            .get(&rec.id)
-            .cloned()
-            .unwrap_or_else(|| embed_text(&rec.text));
-        ids.push(rec.id);
-        vecs.push(vec);
+    for (i, rec) in records.iter().enumerate() {
+        indices.push(i);
+        vecs.push(rec.vector.clone());
     }
-    (ids, vecs)
+    (indices, vecs)
 }
 
-fn hnsw_candidate_ids(
+fn hnsw_candidate_indices(
     query_vec: &[f32],
-    ids: &[u128],
+    indices: &[usize],
     vecs: &[Vec<f32>],
     total: usize,
     limit: usize,
-) -> HashSet<u128> {
+) -> HashSet<usize> {
     let mut set = HashSet::new();
     if vecs.is_empty() {
         return set;
     }
     let k = (limit.saturating_mul(10)).max(10).min(vecs.len());
     if total <= k {
-        for id in ids {
-            set.insert(*id);
+        for idx in indices {
+            set.insert(*idx);
         }
         return set;
     }
@@ -553,8 +368,8 @@ fn hnsw_candidate_ids(
 
     let neighbours: Vec<Neighbour> = hnsw.search(query_vec, k, HNSW_EF_SEARCH.max(k));
     for n in neighbours {
-        if let Some(id) = ids.get(n.d_id) {
-            set.insert(*id);
+        if let Some(idx) = indices.get(n.d_id) {
+            set.insert(*idx);
         }
     }
     set
@@ -572,18 +387,6 @@ fn now_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
-}
-
-struct OpenOptionsExt;
-
-impl OpenOptionsExt {
-    fn open_append(path: &Path) -> io::Result<File> {
-        ensure_parent_dir(path)?;
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-    }
 }
 
 fn embed_text(text: &str) -> Vec<f32> {

@@ -1,43 +1,30 @@
 # Memory Store 格式
 
-## 记录字段
-每行一条记录，字段用 `|` 分隔，顺序如下：
+## 单文件存储
+默认数据库文件：`memory/memories.hnsw`（可用 `MEMSTORE_PATH` 或 `--path` 覆盖）。
+
+该文件为二进制格式（`bincode` 序列化），内容结构如下：
 
 ```
-id|ts|kind|weight|text
+Store {
+  version: u32,
+  vector_dim: usize,
+  records: Vec<Record>
+}
+
+Record {
+  id: u128,
+  ts: i64,
+  kind: String,
+  weight: f32,
+  text: String,
+  vector: Vec<f32>
+}
 ```
-
-- `id`: 毫秒级时间戳（u128）
-- `ts`: 秒级时间戳（i64）
-- `kind`: 分类（profile/state/summary/issue/solution 等）
-- `weight`: 权重（高权重用于“手动记忆”）
-- `text`: 纯文本内容（可包含换行）
-
-## 转义规则
-为了避免分隔符冲突，写入时进行转义：
-
-- `\\` → `\\\\`
-- `\n` → `\\n`
-- `|` → `\\|`
-
-读取时反向还原。
-
-## 向量索引文件
-默认向量索引文件：`memory/memories.vec`（可用 `MEMSTORE_VEC_PATH` 或 `--vec-path` 覆盖）。
-
-每行一条向量，字段用 `|` 分隔，顺序如下：
-
-```
-id|dim|v1,v2,...,vN
-```
-
-- `id`: 对应 `memories.log` 的记录 ID
-- `dim`: 向量维度（默认 256）
-- `vN`: 归一化后的浮点向量分量
 
 ## 近似检索索引（HNSW）
-- 使用 `hnsw_rs` 在查询时构建 HNSW 索引（内存中），用于近似最近邻检索。
-- 当前实现不单独持久化 HNSW 结构，仅持久化向量文件。
+- 使用 `hnsw_rs` 在查询时构建 HNSW 索引（内存中）。
+- 索引本身不落盘，向量随记录持久化在同一 `.hnsw` 文件中。
 
 ## 向量生成（默认实现）
 - 使用 token 哈希到固定维度（feature hashing）。

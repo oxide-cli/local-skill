@@ -24,7 +24,7 @@ description: 持久化对话记忆与外挂大脑。用于：自动写入对话�
    - `cp /Users/c.chen/dev/local-skill/src/memstore/target/release/memstore /Users/c.chen/dev/local-skill/skills/persistent-memory/scripts/memstore`
 3) 运行时使用 Skill 内二进制：
    - `/Users/c.chen/dev/local-skill/skills/persistent-memory/scripts/memstore`
-3) 默认存储路径：`memory/memories.log`（可用 `MEMSTORE_PATH` 或 `--path` 覆盖）
+3) 默认存储路径：`memory/memories.hnsw`（可用 `MEMSTORE_PATH` 或 `--path` 覆盖）
 
 ## 写入流程
 ### 自动摘要（每轮对话结束）

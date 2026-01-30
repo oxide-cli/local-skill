@@ -5,8 +5,8 @@
 ## ✨ 核心特性
 
 - **🚀 高性能后端**: 基于 Rust 编写的 `memstore` 工具，无 Python/Node 依赖，毫秒级响应。
-- **🔒 本地隐私**: 所有记忆数据存储在本地文件 (`memory/memories.log`)，完全掌控数据安全。
-- **🤝 混合检索**: 结合 **Feature Hashing (FNV-1a)** 向量相似度、权重 (Weight) 和 时间衰减 (Recency) 的综合评分机制。
+- **🔒 本地隐私**: 所有记忆数据存储在单一文件 (`memory/memories.hnsw`)，完全掌控数据安全。
+- **🤝 向量检索**: 使用 **HNSW (hnsw_rs)** 做近似最近邻召回，结合向量相似度、权重 (Weight) 和时间衰减 (Recency) 综合评分。
 - **🤖 智能集成**: 支持“记住...”(手动高权重) 和“回忆...”(显式检索) 等多种交互模式。
 
 ## 📂 项目结构 (Project Structure)
@@ -30,7 +30,7 @@
 
 ```bash
 cd src/memstore
-cargo build --release
+cargo build --release --offline
 ```
 
 ### 2. 安装/部署
@@ -80,8 +80,7 @@ cp src/memstore/target/release/memstore skills/persistent-memory/scripts/
 
 可以通过环境变量覆盖默认存储路径：
 
-- `MEMSTORE_PATH`: 记忆日志文件路径 (默认: `memory/memories.log`)
-- `MEMSTORE_VEC_PATH`: 向量索引文件路径 (默认: `memory/memories.vec`)
+- `MEMSTORE_PATH`: 记忆数据库文件路径 (默认: `memory/memories.hnsw`)
 
 ---
 
