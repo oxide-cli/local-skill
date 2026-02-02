@@ -1,12 +1,15 @@
 # MacOS
 .DS_Store
 
+# IntelliJ IDEA
+.idea/
+
 # Rust build artifacts
 target/
 **/target/
 
 # Data & Logs (Local memory storage)
-**/memory/
+**/.memory/
 *.log
 *.vec
 
