@@ -5,7 +5,7 @@
 ## ✨ 核心特性
 
 - **🚀 高性能后端**: 基于 Rust 编写的 `memstore` 工具，无 Python/Node 依赖，毫秒级响应。
-- **🔒 本地隐私**: 所有记忆数据存储在单一文件 (`memory/memories.hnsw`)，完全掌控数据安全。
+- **🔒 本地隐私**: 所有记忆数据存储在单一文件 (`.memory/memories.hnsw`)，完全掌控数据安全。
 - **🤝 向量检索**: 使用 **HNSW (hnsw_rs)** 做近似最近邻召回，结合向量相似度、权重 (Weight) 和时间衰减 (Recency) 综合评分。
 - **🤖 智能集成**: 支持“记住...”(手动高权重) 和“回忆...”(显式检索) 等多种交互模式。
 
@@ -14,7 +14,7 @@
 ```
 .
 ├── skills/
-│   └── persistent-memory/   # Skill 定义、脚本与配置
+│   └── memstore/            # Skill 定义、脚本与配置
 │       ├── SKILL.md         # 集成文档、Prompt 模版
 │       ├── scripts/         # 运行时脚本目录 (存放编译后的 memstore)
 │       └── references/      # 参考文档 (记忆格式规范等)
@@ -39,8 +39,8 @@ cargo build --release --offline
 
 ```bash
 # 在项目根目录执行
-mkdir -p skills/persistent-memory/scripts
-cp src/memstore/target/release/memstore skills/persistent-memory/scripts/
+mkdir -p skills/memstore/scripts
+cp src/memstore/target/release/memstore skills/memstore/scripts/
 ```
 
 ## 📖 使用指南 (Usage)
@@ -80,11 +80,11 @@ cp src/memstore/target/release/memstore skills/persistent-memory/scripts/
 
 可以通过环境变量覆盖默认存储路径：
 
-- `MEMSTORE_PATH`: 记忆数据库文件路径 (默认: `memory/memories.hnsw`)
+- `MEMSTORE_PATH`: 记忆数据库文件路径 (默认: `.memory/memories.hnsw`)
 
 ---
 
 参考文档：
 
-- [Skill 定义与 Prompt (SKILL.md)](skills/persistent-memory/SKILL.md)
-- [记忆格式规范 (memory-format.md)](skills/persistent-memory/references/memory-format.md)
+- [Skill 定义与 Prompt (SKILL.md)](skills/memstore/SKILL.md)
+- [记忆格式规范 (memory-format.md)](skills/memstore/references/memory-format.md)
